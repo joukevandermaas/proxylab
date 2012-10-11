@@ -2,8 +2,8 @@
  * proxy.c - CS:APP Web proxy
  *
  * TEAM MEMBERS:
- *     Andrew Carnegie, ac00@cs.cmu.edu 
- *     Harry Q. Bovik, bovik@cs.cmu.edu
+ *     Jouke van der Maas, 10186883, jouke.vandermaas@gmail.com 
+ *     Marysia Winkels, 10163727, marysia@live.nl
  * 
  * IMPORTANT: Give a high level description of your code here. You
  * must also provide a header comment at the beginning of each
