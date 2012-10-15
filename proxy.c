@@ -17,35 +17,84 @@
  */
 int parse_uri(char *uri, char *target_addr, char *path, int  *port);
 void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, int size);
+void error(const char *msg);
+int open_server(int port);
 
 /* 
  * main - Main routine for the proxy program 
  */
 int main(int argc, char **argv)
 {
-    int clientfd, port; 
-    char *host, buf[MAXLINE];
-    rio_t rio; 
-    
+    //int clientfd, port; 
+    //char *host, buf[MAXLINE];
+    //rio_t rio; 
+    //
     /* Check arguments */
-    if (argc != 2) {
-	fprintf(stderr, "Usage: %s <port number>\n", argv[0]);
-	exit(0);
+    if (argc < 2) {
+	    fprintf(stderr, "Usage: %s <port number>\n", argv[0]);
+	    exit(0);
     }
     
-    host = argv[2]; 
-    port - atoi(argv[1]);
-    
-    clientfd = Open_clientfd(host, port);
-    Rio_readinitb(&rio, clientfd);
-    
-    while(Fgets(buf, MAXLINE, stdin) != NULL) {
-      Rio_writen(clientfd, buf, strlen(buf));
-      Rio_readlineb(&rio, buf, MAXLINE);
-      Fputs(buf, stdout);
-    }
-    Close(clientfd);
+    int port = atoi(argv[1]);
+    //
+    //clientfd = Open_clientfd(host, port);
+    //Rio_readinitb(&rio, clientfd);
+    //
+    //while(Fgets(buf, MAXLINE, stdin) != NULL) {
+      //Rio_writen(clientfd, buf, strlen(buf));
+      //Rio_readlineb(&rio, buf, MAXLINE);
+      //Fputs(buf, stdout);
+    //}
+    //Close(clientfd);
+    open_server(port);
     exit(0);
+}
+
+int open_server(int port)
+{
+     int sockfd, newsockfd;
+     socklen_t clilen;
+     char buffer[MAXLINE];
+     struct sockaddr_in serv_addr, cli_addr;
+     int n;
+     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+     if (sockfd < 0) 
+        error("ERROR opening socket");
+
+     bzero((char *) &serv_addr, sizeof(serv_addr));
+
+     serv_addr.sin_family = AF_INET;
+     serv_addr.sin_addr.s_addr = INADDR_ANY;
+     serv_addr.sin_port = htons(port);
+     if (bind(sockfd, (struct sockaddr *) &serv_addr,
+              sizeof(serv_addr)) < 0) 
+              error("ERROR on binding");
+     listen(sockfd,5);
+     clilen = sizeof(cli_addr);
+     newsockfd = accept(sockfd, 
+                 (struct sockaddr *) &cli_addr, 
+                 &clilen);
+     if (newsockfd < 0) 
+          error("ERROR on accept");
+     bzero(buffer,MAXLINE);
+
+     n = recv(newsockfd, buffer, MAXLINE, 0);
+     if (n < 0) error("ERROR reading from socket");
+
+
+
+     printf("Here is the message: %s\n",buffer);
+     n = send(newsockfd,buffer,MAXLINE, 0);
+     if (n < 0) error("ERROR writing to socket");
+     close(newsockfd);
+     close(sockfd);
+     return 0;
+}
+
+void error(const char *msg)
+{
+    fprintf(stderr, msg);
+    exit(1);
 }
 
 
@@ -82,7 +131,7 @@ int parse_uri(char *uri, char *hostname, char *pathname, int *port)
 	*port = atoi(hostend + 1);
     
     /* Extract the path */
-    pathbegin = strchr(hos-tbegin, '/');
+    pathbegin = strchr(hostbegin, '/');
     if (pathbegin == NULL) {
 	pathname[0] = '\0';
     }
