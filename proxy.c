@@ -19,6 +19,7 @@ int parse_uri(char *uri, char *target_addr, char *path, int  *port);
 void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, int size);
 void error(const char *msg);
 int open_server(int port);
+int client_request(char* request, char* response);
 
 /* 
  * main - Main routine for the proxy program 
@@ -67,28 +68,91 @@ int open_server(int port)
      serv_addr.sin_addr.s_addr = INADDR_ANY;
      serv_addr.sin_port = htons(port);
      if (bind(sockfd, (struct sockaddr *) &serv_addr,
-              sizeof(serv_addr)) < 0) 
-              error("ERROR on binding");
-     listen(sockfd,5);
-     clilen = sizeof(cli_addr);
-     newsockfd = accept(sockfd, 
-                 (struct sockaddr *) &cli_addr, 
-                 &clilen);
-     if (newsockfd < 0) 
-          error("ERROR on accept");
-     bzero(buffer,MAXLINE);
+        sizeof(serv_addr)) < 0) 
+        error("ERROR on binding");
 
-     n = recv(newsockfd, buffer, MAXLINE, 0);
-     if (n < 0) error("ERROR reading from socket");
+     while(1)
+     {
+        listen(sockfd,5);
+        clilen = sizeof(cli_addr);
+        newsockfd = accept(sockfd, 
+                    (struct sockaddr *) &cli_addr, 
+                    &clilen);
+        if (newsockfd < 0) 
+            error("ERROR on accept");
+        bzero(buffer,MAXLINE);
+
+        n = recv(newsockfd, buffer, MAXLINE, 0);
+        if (n < 0) error("ERROR reading from socket");
+
+        //printf("uri: %s\n", uri);
+        char* response;
+        client_request(buffer, response);
+
+        n = send(newsockfd,response,MAXLINE, 0);
+        if (n < 0) error("ERROR writing to socket");
+        close(newsockfd);
+    }
+    close(sockfd);
+    return 0;
+}
+
+int client_request(char* request, char* response)
+{
+    int sockfd, n;
+
+    struct sockaddr_in serv_addr;
+    struct hostent *server;
+
+    char buffer[MAXLINE];
 
 
+    char *token = NULL;
+    char *uri;
+    token = strtok(buffer, " ");
+    while (token) {
+        if(strncasecmp(token, "http://", 7) == 0)
+        {
+            uri = token;
+            break;
+        }
+        token = strtok(NULL, " ");
+    }
+    char hostname[MAXLINE];
+    char pathname[MAXLINE];
+    int port = 80;
+    bzero(hostname, MAXLINE);
+    bzero(pathname, MAXLINE);
+    if(parse_uri(uri, hostname, pathname, &port)<0)
+        return -1;
+    printf("%s/%s:%d", hostname, pathname, port);
 
-     printf("Here is the message: %s\n",buffer);
-     n = send(newsockfd,buffer,MAXLINE, 0);
-     if (n < 0) error("ERROR writing to socket");
-     close(newsockfd);
-     close(sockfd);
-     return 0;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) 
+        error("ERROR opening socket");
+    server = gethostbyname(hostname);
+    if (server == NULL) {
+        fprintf(stderr,"ERROR, no such host\n");
+        exit(0);
+    }
+    bzero((char *) &serv_addr, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    bcopy((char *)server->h_addr, 
+         (char *)&serv_addr.sin_addr.s_addr,
+         server->h_length);
+    serv_addr.sin_port = htons(port);
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) 
+        error("ERROR connecting");
+    bzero(buffer,MAXLINE);
+    n = send(sockfd,request,MAXLINE, 0);
+    if (n < 0) 
+         error("ERROR writing to socket");
+    bzero(buffer,MAXLINE);
+    n = recv(sockfd,buffer, MAXLINE, 0);
+    if (n < 0) 
+         error("ERROR reading from socket");
+    printf("%s\n",buffer);
+    return 0;
 }
 
 void error(const char *msg)
