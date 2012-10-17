@@ -19,7 +19,9 @@ int parse_uri(char *uri, char *target_addr, char *path, int  *port);
 void format_log_entry(char *logstring, struct sockaddr_in *sockaddr, char *uri, int size);
 void error(const char *msg);
 int open_server(int port);
-int client_request(char* request, char* response);
+int client_request(char* request, int exsock);
+void handler(int sig);
+char* request_to_uri(char* request);
 
 /* 
  * main - Main routine for the proxy program 
@@ -64,52 +66,114 @@ int open_server(int port)
 
      bzero((char *) &serv_addr, sizeof(serv_addr));
 
-     serv_addr.sin_family = AF_INET;
+     serv_addr.sin_family = PF_INET;
      serv_addr.sin_addr.s_addr = INADDR_ANY;
      serv_addr.sin_port = htons(port);
      if (bind(sockfd, (struct sockaddr *) &serv_addr,
         sizeof(serv_addr)) < 0) 
         error("ERROR on binding");
 
+     listen(sockfd,5);
+     printf("Now listening on %d.\n", port);
+     Signal(SIGCHLD, handler);
      while(1)
      {
-        listen(sockfd,5);
         clilen = sizeof(cli_addr);
         newsockfd = accept(sockfd, 
                     (struct sockaddr *) &cli_addr, 
                     &clilen);
         if (newsockfd < 0) 
             error("ERROR on accept");
-        bzero(buffer,MAXLINE);
+        printf("Incoming request:\n");
+        if (Fork() == 0)
+        {
+            close(sockfd);
+            bzero(buffer,MAXLINE);
 
-        n = recv(newsockfd, buffer, MAXLINE, 0);
-        if (n < 0) error("ERROR reading from socket");
+            n = recv(newsockfd, buffer, MAXLINE, 0);
+            if (n < 0) error("ERROR reading from socket");
+            printf("%s\n\n", buffer);
+            //send(newsockfd, "Hello!", 6, 0);
 
-        //printf("uri: %s\n", uri);
-        char* response;
-        client_request(buffer, response);
+            client_request(buffer, newsockfd);
 
-        n = send(newsockfd,response,MAXLINE, 0);
-        if (n < 0) error("ERROR writing to socket");
-        close(newsockfd);
+            //n = send(newsockfd,response,MAXLINE, 0);
+            //if (n < 0) error("ERROR writing to socket");
+            close(newsockfd);
+            exit(0);
+        }
     }
     close(sockfd);
     return 0;
 }
 
-int client_request(char* request, char* response)
+int client_request(char* request, int exsock)
 {
     int sockfd, n;
 
     struct sockaddr_in serv_addr;
     struct hostent *server;
 
-    char buffer[MAXLINE];
+    char response[MAXLINE];
 
+    char hostname[MAXLINE];
+    char pathname[MAXLINE];
+    int port = 80;
+    bzero(hostname, MAXLINE);
+    bzero(pathname, MAXLINE);
 
+    char request2[MAXLINE];
+    memcpy(request2, request, MAXLINE);
+    char* uri = request_to_uri(request2);
+    if(parse_uri(uri, hostname, pathname, &port)<0)
+        return -1;
+
+    sockfd = socket(PF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) 
+        error("ERROR opening socket");
+
+    server = gethostbyname(hostname);
+    if (server == NULL)     
+        error("ERROR: no such host");
+
+    bzero((char *) &serv_addr, sizeof(serv_addr));
+
+    serv_addr.sin_family = AF_INET;
+    bcopy((char *)server->h_addr, 
+         (char *)&serv_addr.sin_addr.s_addr,
+         server->h_length);
+    serv_addr.sin_port = htons(port);
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) 
+        error("ERROR connecting");
+
+    bzero(response,MAXLINE);
+
+    n = send(sockfd,request,MAXLINE, 0);
+    
+    if (n < 0) 
+         error("ERROR writing to socket");
+    
+    bzero(response,MAXLINE);
+
+    n = 0;
+    while((n = recv(sockfd,response, MAXLINE, 0)) > 0)
+    {
+        if (n < 0) 
+            error("ERROR reading from socket");
+        printf("Response:\n%s", response);
+        send(exsock, response, MAXLINE, 0);
+    };
+    printf("\n\n");
+
+    return 0;
+}
+
+char* request_to_uri(char* request)
+{
+    
     char *token = NULL;
     char *uri;
-    token = strtok(buffer, " ");
+    token = strtok(request, " ");
     while (token) {
         if(strncasecmp(token, "http://", 7) == 0)
         {
@@ -118,41 +182,16 @@ int client_request(char* request, char* response)
         }
         token = strtok(NULL, " ");
     }
-    char hostname[MAXLINE];
-    char pathname[MAXLINE];
-    int port = 80;
-    bzero(hostname, MAXLINE);
-    bzero(pathname, MAXLINE);
-    if(parse_uri(uri, hostname, pathname, &port)<0)
-        return -1;
-    printf("%s/%s:%d", hostname, pathname, port);
+    return uri;
+}
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) 
-        error("ERROR opening socket");
-    server = gethostbyname(hostname);
-    if (server == NULL) {
-        fprintf(stderr,"ERROR, no such host\n");
-        exit(0);
-    }
-    bzero((char *) &serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, 
-         (char *)&serv_addr.sin_addr.s_addr,
-         server->h_length);
-    serv_addr.sin_port = htons(port);
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) 
-        error("ERROR connecting");
-    bzero(buffer,MAXLINE);
-    n = send(sockfd,request,MAXLINE, 0);
-    if (n < 0) 
-         error("ERROR writing to socket");
-    bzero(buffer,MAXLINE);
-    n = recv(sockfd,buffer, MAXLINE, 0);
-    if (n < 0) 
-         error("ERROR reading from socket");
-    printf("%s\n",buffer);
-    return 0;
+void handler(int sig)
+{
+    pid_t pid;
+    int stat;
+    while((pid = waitpid(-1, &stat, WNOHANG)) > 0)
+        ;
+    return;
 }
 
 void error(const char *msg)
