@@ -22,9 +22,9 @@ int open_server(int port);
 void handler(int sig);
 char* request_to_uri(char* request);
 int handle_request(int socket);
-int get_server_socket(char* uri);
 int get_client_socket(int port, socklen_t *chilen, struct sockaddr_in *serv_addr, struct sockaddr_in *cli_adr);
-void get_server_response(rio_t rio, char* request, int socket, char* buffer);
+void get_server_response(char* request, int socket, char* buffer);
+int get_server_socket(char* host);
 
 /* 
  * main - Main routine for the proxy program 
@@ -75,33 +75,33 @@ int open_server(int port)
 int handle_request(int socket)
 {
     char buffer[MAXLINE];
-    int n, offset; 
-    rio_t crio, srio;
-    char* uri;
+    int n;
+    rio_t rio;
+    char line_1[MAXLINE];
+    char line_2[MAXLINE];
     int server_socket;
     char response[MAXLINE];
     
     bzero(buffer, MAXLINE);
 
-    Rio_readinitb(&crio, socket);
-    n = Rio_readlineb(&crio, buffer, MAXLINE);
+    Rio_readinitb(&rio, socket);
+    n = Rio_readlineb(&rio, buffer, MAXLINE);
+    memcpy(line_1, buffer, n);
+    n = Rio_readlineb(&rio, buffer, MAXLINE);
+    memcpy(line_2, buffer, n);
 
-    uri = request_to_uri(buffer);
-    server_socket = get_server_socket(uri);
-    Rio_readinitb(&srio, server_socket);
-
-    printf("a");
-    Rio_writen(server_socket, buffer, MAXLINE);
-
-    while((n = Rio_readlineb(&crio, buffer, MAXLINE)) != 0)
+    server_socket = get_server_socket(line_2 + 6);
+    printf("%d", server_socket);
+    
+    Rio_writen(server_socket, line_1, sizeof(line_1));
+    Rio_writen(server_socket, line_2, sizeof(line_2));
+    while((n = Rio_readlineb(&rio, buffer, MAXLINE)) != 0)
     {
-        printf("%s", buffer);
-        Rio_writen(server_socket, buffer, MAXLINE);
-        offset += n;
+        Rio_writen(server_socket, buffer, n);
     }
     
     bzero(response, MAXLINE);
-    get_server_response(srio, buffer, server_socket, response);
+    get_server_response(buffer, server_socket, response);
     Rio_writen(socket, response, MAXLINE);
 
     close(socket);
@@ -110,39 +110,43 @@ int handle_request(int socket)
     return 0;
 }
 
-int get_server_socket(char* uri)
+int get_server_socket(char* host)
 {
-    int sockfd;
-    struct sockaddr_in serv_addr;
-    struct hostent *server;
-    
-    char hostname[MAXLINE];
-    char pathname[MAXLINE];
-    int port = 80;
-    bzero(hostname, MAXLINE);
-    bzero(pathname, MAXLINE);
-    
-    if(parse_uri(uri, hostname, pathname, &port) < 0);
-        return -1;
+    int sockfd;  
+    struct addrinfo hints, *servinfo, *p;
+    int rv;
 
-    sockfd = socket(PF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) 
-        error("ERROR opening socket");
+    printf("host: %s", host);
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC; // use AF_INET6 to force IPv6
+    hints.ai_socktype = SOCK_STREAM;
 
-    server = gethostbyname(hostname);
-    if (server == NULL)     
-        error("ERROR: no such host");
+    if ((rv = getaddrinfo(host, "http", &hints, &servinfo)) != 0) {
+            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+                exit(1);
+    }
 
-    bzero((char *) &serv_addr, sizeof(serv_addr));
-
-    serv_addr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr, 
-        (char *)&serv_addr.sin_addr.s_addr,
-        server->h_length);
-    serv_addr.sin_port = htons(port);
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) 
-        error("ERROR connecting");
-
+    for(p = servinfo; p != NULL; p = p->ai_next) 
+    {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) 
+        {
+            perror("socket");
+            continue;
+        }
+        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) 
+        {
+            close(sockfd);
+            perror("connect");
+            continue;
+        }
+        break;
+    }
+    if (p == NULL) 
+    {
+        fprintf(stderr, "failed to connect\n");
+        exit(2);
+    }
+    freeaddrinfo(servinfo); 
     return sockfd;
 }
 
@@ -167,8 +171,11 @@ int get_client_socket(int port, socklen_t *clilen, struct sockaddr_in *serv_addr
     return sockfd;
 }
 
-void get_server_response(rio_t rio, char* request, int socket, char* buffer)
+void get_server_response(char* request, int socket, char* buffer)
 {
+    rio_t rio;
+    Rio_readinitb(&rio, socket);
+
     printf("Request:\n%s", request);
     Rio_writen(socket, request, MAXLINE);
     Rio_readnb(&rio, buffer, MAXLINE);
