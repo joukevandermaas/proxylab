@@ -23,8 +23,9 @@ void handler(int sig);
 char* request_to_uri(char* request);
 int handle_request(int socket);
 int get_client_socket(int port, socklen_t *chilen, struct sockaddr_in *serv_addr, struct sockaddr_in *cli_adr);
-void get_server_response(char* request, int socket, char* buffer);
+void get_server_response(int server_socket, int client_socket);
 int get_server_socket(char* host);
+void trim(char * s);
 
 /* 
  * main - Main routine for the proxy program 
@@ -60,12 +61,13 @@ int open_server(int port)
         newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         if (newsockfd < 0) 
             error("ERROR on accept");
-        printf("Now handling request.\n");
 
 //        if (Fork() == 0)
         {
             //close(sockfd);
+            printf("connection opened\n");
             handle_request(newsockfd);
+            close(newsockfd);
         }
     }
     close(sockfd);
@@ -80,7 +82,6 @@ int handle_request(int socket)
     char line_1[MAXLINE];
     char line_2[MAXLINE];
     int server_socket;
-    char response[MAXLINE];
     
     bzero(buffer, MAXLINE);
 
@@ -90,24 +91,41 @@ int handle_request(int socket)
     n = Rio_readlineb(&rio, buffer, MAXLINE);
     memcpy(line_2, buffer, n);
 
-    server_socket = get_server_socket(line_2 + 6);
-    printf("%d", server_socket);
+    char* host[n-6];
+    strncpy(host, line_2+6, n-6); // +6 to remove leading 'Host: ', ends in 2 spaces
+    trim(host);
+
+    printf("%d -- %s", strlen(host), host);
+    server_socket = Open_clientfd(host, 80);
     
     Rio_writen(server_socket, line_1, sizeof(line_1));
     Rio_writen(server_socket, line_2, sizeof(line_2));
+
+    printf("Request:\n%s%s", line_1, line_2);
     while((n = Rio_readlineb(&rio, buffer, MAXLINE)) != 0)
     {
+        printf("%s", buffer);
+        if(n == 0)
+            break;
         Rio_writen(server_socket, buffer, n);
     }
     
-    bzero(response, MAXLINE);
-    get_server_response(buffer, server_socket, response);
-    Rio_writen(socket, response, MAXLINE);
+    get_server_response(server_socket, socket);
 
-    close(socket);
     close(server_socket);
 
     return 0;
+}
+
+void trim(char * s) 
+{
+    char * p = s;
+    int l = strlen(p);
+
+    while(isspace(p[l - 1])) p[--l] = 0;
+    while(* p && isspace(* p)) ++p, --l;
+
+    memmove(s, p, l + 1);
 }
 
 int get_server_socket(char* host)
@@ -116,7 +134,6 @@ int get_server_socket(char* host)
     struct addrinfo hints, *servinfo, *p;
     int rv;
 
-    printf("host: %s", host);
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC; // use AF_INET6 to force IPv6
     hints.ai_socktype = SOCK_STREAM;
@@ -171,15 +188,21 @@ int get_client_socket(int port, socklen_t *clilen, struct sockaddr_in *serv_addr
     return sockfd;
 }
 
-void get_server_response(char* request, int socket, char* buffer)
+void get_server_response(int server_socket, int client_socket)
 {
+    int n;
     rio_t rio;
-    Rio_readinitb(&rio, socket);
+    Rio_readinitb(&rio, server_socket);
+    char buffer[MAXLINE];
 
-    printf("Request:\n%s", request);
-    Rio_writen(socket, request, MAXLINE);
-    Rio_readnb(&rio, buffer, MAXLINE);
-    printf("\nResponse:\n%s", buffer);
+    printf("Response:\n");
+    while((n = Rio_readlineb(&rio, buffer, MAXLINE)) != 0)
+    {
+        printf("%s", buffer);
+        Rio_writen(client_socket, buffer, n);
+        //if(strlen(buffer) <= 2)
+        //    break;
+    }
 }
 
 char* request_to_uri(char* request)
