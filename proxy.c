@@ -23,8 +23,8 @@ void handler(int sig);
 char* request_to_uri(char* request);
 int handle_request(int socket);
 int get_client_socket(int port, socklen_t *chilen, struct sockaddr_in *serv_addr, struct sockaddr_in *cli_adr);
-void get_server_response(int server_socket, int client_socket);
-int get_server_socket(char* host);
+int get_server_response(int server_socket, int client_socket);
+int get_server_socket(char* host, struct addrinfo *servinfo);
 void trim(char * s);
 
 /* 
@@ -68,6 +68,7 @@ int open_server(int port)
             printf("connection opened\n");
             handle_request(newsockfd);
             close(newsockfd);
+            //exit(0);
         }
     }
     close(sockfd);
@@ -76,12 +77,14 @@ int open_server(int port)
 
 int handle_request(int socket)
 {
+    setbuf(stdout, NULL);
     char buffer[MAXLINE];
     int n;
     rio_t rio;
     char line_1[MAXLINE];
     char line_2[MAXLINE];
     int server_socket;
+    struct addrinfo* info;
     
     bzero(buffer, MAXLINE);
 
@@ -91,12 +94,20 @@ int handle_request(int socket)
     n = Rio_readlineb(&rio, buffer, MAXLINE);
     memcpy(line_2, buffer, n);
 
-    char* host[n-6];
-    strncpy(host, line_2+6, n-6); // +6 to remove leading 'Host: ', ends in 2 spaces
-    trim(host);
+    char host[MAXLINE];
+    bzero(host, MAXLINE);
+    memcpy(host, line_2+6, n); // +6 to remove leading 'Host: ', ends in 2 spaces
+    char *end;
+    if(*host != 0)  // All spaces?
+    {
+        // Trim trailing space
+        end = host + strlen(host) - 1;
+        while(end > host && isspace(*end)) end--;
 
-    printf("%d -- %s", strlen(host), host);
-    server_socket = Open_clientfd(host, 80);
+        // Write new null terminator
+        *(end+1) = 0;
+    }
+    server_socket = get_server_socket(host, info);
     
     Rio_writen(server_socket, line_1, sizeof(line_1));
     Rio_writen(server_socket, line_2, sizeof(line_2));
@@ -110,28 +121,43 @@ int handle_request(int socket)
         Rio_writen(server_socket, buffer, n);
     }
     
-    get_server_response(server_socket, socket);
+    int size;
+    char log[MAXLINE];
+    size = get_server_response(server_socket, socket);
+    format_log_entry(log, info, request_to_uri(line_1), size);
 
+    FILE *file;
+    file = Fopen("proxy.log", "a+");
+    fprintf(file, "%s", log);
+    Fclose(file);
+
+    freeaddrinfo(info);
     close(server_socket);
 
     return 0;
 }
 
-void trim(char * s) 
+void trim(char *str)
 {
-    char * p = s;
-    int l = strlen(p);
+  char *end;
+  // Trim leading space
+  while(isspace(*str)) str++;
 
-    while(isspace(p[l - 1])) p[--l] = 0;
-    while(* p && isspace(* p)) ++p, --l;
+  if(*str == 0)  // All spaces?
+    return;
 
-    memmove(s, p, l + 1);
+  // Trim trailing space
+  end = str + strlen(str) - 1;
+  while(end > str && isspace(*end)) end--;
+
+  // Write new null terminator
+  *(end+1) = 0;
 }
 
-int get_server_socket(char* host)
+int get_server_socket(char* host, struct addrinfo* servinfo)
 {
     int sockfd;  
-    struct addrinfo hints, *servinfo, *p;
+    struct addrinfo hints, *p;
     int rv;
 
     memset(&hints, 0, sizeof hints);
@@ -163,7 +189,7 @@ int get_server_socket(char* host)
         fprintf(stderr, "failed to connect\n");
         exit(2);
     }
-    freeaddrinfo(servinfo); 
+    //freeaddrinfo(servinfo); 
     return sockfd;
 }
 
@@ -188,9 +214,9 @@ int get_client_socket(int port, socklen_t *clilen, struct sockaddr_in *serv_addr
     return sockfd;
 }
 
-void get_server_response(int server_socket, int client_socket)
+int get_server_response(int server_socket, int client_socket)
 {
-    int n;
+    int n, offset;
     rio_t rio;
     Rio_readinitb(&rio, server_socket);
     char buffer[MAXLINE];
@@ -200,9 +226,11 @@ void get_server_response(int server_socket, int client_socket)
     {
         printf("%s", buffer);
         Rio_writen(client_socket, buffer, n);
+        offset += n;
         //if(strlen(buffer) <= 2)
         //    break;
     }
+    return offset;
 }
 
 char* request_to_uri(char* request)
